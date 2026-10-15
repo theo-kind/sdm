@@ -42,12 +42,18 @@ prep_background <- function(pres_rows, cell_tab, pc, pc_sf, tmpl, rng, vars,
   
   avail <- setdiff(seq_len(nrow(cell_tab)), pres_rows)
   
-  # Buffer: cells within buffer_width (m) of the presences
+  # Buffer: cells within each buffer_width (m) of the presences
+  # -> candidate pools buf_in_<km> / buf_out_<km> (e.g. buf_in_10, buf_out_50)
   r <- tmpl * NA
   r[cell_tab$cell[pres_rows]] <- 1
-  inside <- terra::values(terra::buffer(r, width = buffer_width), mat = FALSE)
-  inside <- which(inside[cell_tab$cell] == 1)
-  
+  buf <- list()
+  for (w in buffer_width) {
+    inside <- terra::values(terra::buffer(r, width = w), mat = FALSE)
+    inside <- which(inside[cell_tab$cell] == 1)
+    buf[[paste0("buf_in_",  w / 1000)]] <- intersect(inside, avail)
+    buf[[paste0("buf_out_", w / 1000)]] <- setdiff(avail, inside)
+  }
+
   # USE: KDE of the presences in PC space, exclude the convex hull of the core
   pres_pc <- as.matrix(pc[pres_rows, c("PC1", "PC2")])
   kde     <- ks::kde(x = pres_pc, eval.points = pres_pc)$estimate
@@ -63,13 +69,11 @@ prep_background <- function(pres_rows, cell_tab, pc, pc_sf, tmpl, rng, vars,
     bins_sizes   = unname(signif((rng[2, vars] - rng[1, vars]) / ecopa_bins, 2))
   )
   
-  list(
+  c(list(
     avail    = avail,
-    buf_in   = intersect(inside, avail),
-    buf_out  = setdiff(avail, inside),
     use_cand = setdiff(avail, in_hull),
     niche    = niche
-  )
+  ), buf)
 }
 
 
@@ -90,12 +94,17 @@ sample_background <- function(strategy, n, prep, cell_tab, pc, vars,
     return(as.data.frame(bg[, vars]))
   }
   
+  # buffer strategies (buf_in_<km>, buf_out_<km>): random draw from the pool
+  if (startsWith(strategy, "buf_")) {
+    if (is.null(prep[[strategy]])) stop("Unknown buffer strategy: ", strategy,
+                                        " (check buffer_width)")
+    return(cell_tab[sample_rows(prep[[strategy]], n), vars])
+  }
+
   rows <- switch(strategy,
                  rand_geo = sample_rows(prep$avail, n),
                  rand_env = uniform_env_sample(prep$avail, n, pc, grid_res),
                  use      = uniform_env_sample(prep$use_cand, n, pc, grid_res),
-                 buf_in   = sample_rows(prep$buf_in, n),
-                 buf_out  = sample_rows(prep$buf_out, n),
                  stop("Unknown strategy: ", strategy)
   )
   cell_tab[rows, vars]
