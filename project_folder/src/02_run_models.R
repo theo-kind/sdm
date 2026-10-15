@@ -30,11 +30,12 @@ source(path, echo = TRUE)
 test_mode <- FALSE   # TRUE: 1 species, n_pres = 100 & 500, 1 replicate
 
 vars          <- c("bio_3", "bio_5", "bio_12", "bio_15")
-n_pres_levels <- c(50, 100, 300, 500)
-ratio_levels  <- c("2:1" = 0.5, "1:1" = 1, "1:10" = 10, "1:100" = 100)  # PA per presence
-strategies    <- c("ecopa", "use", "rand_geo", "rand_env", "buf_in", "buf_out")
+n_pres_levels <- c(250)
+ratio_levels  <- c("2:1" = 0.5, "1:1" = 1, "1:10" = 10, "1:40" = 40, "1:100" = 100)  # PA per presence
+strategies    <- c("ecopa", "use", "rand_geo", "rand_env",
+                   "buf_in_10", "buf_out_10", "buf_in_50", "buf_out_50")
 n_rep         <- 20      # replicates
-buffer_width  <- 50000   # m
+buffer_width  <- c(10000, 50000)   # m; one in/out strategy pair per width
 use_thres     <- 0.75    # KDE quantile (USE default)
 grid_res      <- 20      # grid in PC space (USE, Random env)
 ecopa_bins    <- 30      # bins per variable (EcoPA)
@@ -54,6 +55,7 @@ cell_tab  <- terra::as.data.frame(env[[vars]], cells = TRUE, na.rm = TRUE)
 rng       <- sapply(cell_tab[vars], range)
 env_means <- colMeans(cell_tab[vars])
 q_trim <- sapply(cell_tab[vars], quantile, probs = c(0.025, 0.975))
+sc        <- list(mu = env_means, sd = sapply(cell_tab[vars], sd))  # z-scaling for maxnet
 
 # PCA once (basis for USE and Random env)
 pca   <- prcomp(cell_tab[vars], scale. = TRUE)
@@ -111,7 +113,7 @@ for (sp_id in overview$id) {
         bg   <- sample_background(strategy, n_bg, prep, cell_tab, pc, vars,
                                   grid_res, ecopa_in)
         out  <- run_model(pres_env, bg, eval_env, eval_pa, eval_suit,
-                          meta$true_pars, rng, env_means, q_trim)
+                          meta$true_pars, rng, env_means, q_trim, sc)
         info <- tibble::tibble(
           species = sp_id, n_pres = n_pres, replicate = rep_id,
           strategy = strategy, ratio = ratio,

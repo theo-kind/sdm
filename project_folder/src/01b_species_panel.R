@@ -1,8 +1,9 @@
 # ================================= Notes =================================
 #
 # 01b_species_panel.R
-# Overview figure of the virtual species: true response curves
-# (variables in `vars`) + suitability map per species.
+# Overview figure of the virtual species, sized for an A4 page:
+# true response curves (one column per variable in `vars`) and the
+# suitability map per species (rows), with prevalence in the row label.
 # Reads the outputs of 01_generate_species.R.
 #
 # ==========================================================================
@@ -27,61 +28,88 @@ source(path, echo = TRUE)
 
 # ================================ Parameters ==============================
 
-vars     <- c("bio_3", "bio_5", "bio_12", "bio_15")
-line_col <- "#3B4A7A"
-map_col  <- hcl.colors(100, "viridis")
+vars       <- c("bio_3", "bio_5", "bio_12", "bio_15")
+var_labels <- c(bio_3  = "BIO3\nIsothermality (%)",
+                bio_5  = "BIO5\nMax. temperature (\u00b0C)",
+                bio_12 = "BIO12\nAnnual precip. (mm)",
+                bio_15 = "BIO15\nPrecip. season. (CV)")
+line_col   <- "#3B4A7A"
+map_fact   <- 6          # aggregation of the maps for display only
+fig_size   <- c(w = 6.3, h = 9.2)   # inches; ~16 x 23 cm (A4 text area)
 
 env      <- terra::rast(file.path(envrmt$path_raster, "env_rou_30s.tif"))
 rng      <- terra::minmax(env)
 overview <- readRDS(file.path(envrmt$path_virtual_species, "species_overview.RDS"))
-n_sp     <- nrow(overview)
+sp_lab   <- setNames(sprintf("%s\nPrev. %.2f", overview$id, overview$prevalence),
+                     overview$id)
 
 
-# ================================ Functions ===============================
+# ================================ Data ====================================
 
-# true response: Gaussian, min-max scaled over the range in Romania
-true_curve <- function(pars, v, n = 500) {
-  p <- pars[pars$variable == v, ]
-  x <- seq(rng[1, v], rng[2, v], length.out = n)
-  y <- dnorm(x, p$mean, p$sd)
-  list(x = x, y = (y - min(y)) / (max(y) - min(y)))
-}
+# true responses: Gaussian, min-max scaled over the range in Romania
+curves <- purrr::map_dfr(overview$id, \(sp) {
+  pars <- readRDS(file.path(envrmt$path_virtual_species,
+                            paste0(sp, "_meta.RDS")))$true_pars
+  purrr::map_dfr(vars, \(v) {
+    p <- pars[pars$variable == v, ]
+    x <- seq(rng[1, v], rng[2, v], length.out = 300)
+    y <- dnorm(x, p$mean, p$sd)
+    tibble::tibble(species = sp, variable = v, x = x,
+                   y = (y - min(y)) / (max(y) - min(y)))
+  })
+}) |>
+  dplyr::mutate(species  = factor(species, levels = overview$id),
+                variable = factor(variable, levels = vars))
+
+# suitability maps (aggregated for display)
+maps <- purrr::map_dfr(overview$id, \(sp) {
+  terra::rast(file.path(envrmt$path_virtual_species, paste0(sp, ".tif")))[["suitab"]] |>
+    terra::aggregate(fact = map_fact, fun = "mean", na.rm = TRUE) |>
+    terra::as.data.frame(xy = TRUE, na.rm = TRUE) |>
+    stats::setNames(c("x", "y", "suitab")) |>
+    dplyr::mutate(species = sp)
+}) |>
+  dplyr::mutate(species = factor(species, levels = overview$id),
+                panel = "Suitability")
 
 
 # ================================= Figure =================================
 
-png(file.path(envrmt$path_figures, "01_species_summary_panel.png"),
-    width = 4000, height = 600 * n_sp, res = 250)
+theme_panel <- theme_bw(base_size = 7) +
+  theme(panel.grid = element_blank(),
+        strip.background = element_blank(),
+        strip.text.x = element_text(face = "bold", size = 6.5),
+        panel.spacing.y = unit(2, "pt"),
+        plot.margin = margin(2, 2, 2, 2))
 
-par(mfrow = c(n_sp, length(vars) + 1),
-    oma = c(0.5, 3, 2, 0.5), mgp = c(2, 0.6, 0))
+p_curves <- ggplot(curves, aes(x, y)) +
+  geom_line(colour = line_col, linewidth = 0.5) +
+  facet_grid(species ~ variable, scales = "free_x",
+             labeller = labeller(variable = var_labels)) +
+  scale_y_continuous(breaks = c(0, 1), limits = c(0, 1)) +
+  scale_x_continuous(n.breaks = 4) +
+  labs(x = NULL, y = "Relative suitability") +
+  theme_panel +
+  theme(strip.text.y = element_blank(),
+        axis.text = element_text(size = 5.5))
 
-for (i in seq_len(n_sp)) {
-  sp_id <- overview$id[i]
-  meta  <- readRDS(file.path(envrmt$path_virtual_species, paste0(sp_id, "_meta.RDS")))
-  
-  # Response Curves
-  for (j in seq_along(vars)) {
-    rc <- true_curve(meta$true_pars, vars[j])
-    par(mar = c(2.5, 2.8, 1.2, 0.6))
-    plot(rc$x, rc$y, type = "l", lwd = 2, col = line_col,
-         ylim = c(0, 1), xlab = "", ylab = "", las = 1, cex.axis = 0.9)
-    if (i == 1) mtext(vars[j], side = 3, line = 1.2, font = 2)
-  }
-  
-  # Suitability map
-  suit <- terra::rast(file.path(envrmt$path_virtual_species,
-                                paste0(sp_id, ".tif")))[["suitab"]]
-  terra::plot(suit, col = map_col, range = c(0, 1),
-              mar = c(2.5, 1.5, 1.2, 3.5),
-              pax = list(cex.axis = 0.7), plg = list(cex = 0.7))
-  if (i == 1) mtext("Suitability map", side = 3, line = 1.2, font = 2)
-  mtext(sprintf("Prevalence = %.2f", overview$prevalence[i]),
-        side = 1, line = 2, cex = 0.6)
-  
-  # Row label
-  mtext(sp_id, side = 2, outer = TRUE, las = 1, font = 2, line = 0.5,
-        at = 1 - (i - 0.5) / n_sp)
-}
+p_maps <- ggplot(maps, aes(x, y, fill = suitab)) +
+  geom_raster() +
+  coord_quickmap(expand = FALSE) +
+  facet_grid(species ~ panel, labeller = labeller(species = sp_lab)) +
+  scale_fill_viridis_c(limits = c(0, 1), breaks = c(0, 0.5, 1),
+                       name = "Suitability") +
+  theme_panel +
+  theme(axis.text = element_blank(), axis.ticks = element_blank(),
+        axis.title = element_blank(), panel.border = element_blank(),
+        strip.text.y = element_text(angle = 0, hjust = 0, size = 6),
+        legend.position = "bottom",
+        legend.key.height = unit(0.2, "cm"), legend.key.width = unit(0.6, "cm"),
+        legend.title = element_text(size = 6, vjust = 0.9),
+        legend.text = element_text(size = 5.5),
+        legend.margin = margin(0, 0, 0, 0))
 
-dev.off()
+p <- patchwork::wrap_plots(p_curves, p_maps, nrow = 1, widths = c(4, 1.35))
+
+ggsave(file.path(envrmt$path_figures, "01_species_summary_panel.png"),
+       p, width = fig_size[["w"]], height = fig_size[["h"]], dpi = 400)
